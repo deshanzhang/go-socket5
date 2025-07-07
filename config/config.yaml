@@ -1,0 +1,13 @@
+# 项目配置示例
+socks5:
+  host: 0.0.0.0
+  port: 1080
+  user: test
+  password: test
+  blacklist: []
+  auth_list: [2] # 1=无认证 2=用户名密码认证
+
+gin:
+  host: 0.0.0.0
+  port: 8080
+  mode: release # release debug

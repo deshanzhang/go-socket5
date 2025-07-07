@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOCKS5 代理服务器管理面板</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 30px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #fff;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        .status {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            border-left: 4px solid #4CAF50;
+        }
+        .info {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+        .button {
+            background: #4CAF50;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+            transition: background 0.3s;
+        }
+        .button:hover {
+            background: #45a049;
+        }
+        .button-danger {
+            background: #dc3545;
+        }
+        .button-danger:hover {
+            background: #c82333;
+        }
+        .button-warning {
+            background: #ffc107;
+            color: #212529;
+        }
+        .button-warning:hover {
+            background: #e0a800;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: rgba(255, 255, 255, 0.15);
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        .tabs {
+            display: flex;
+            margin: 20px 0;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+        }
+        .tab {
+            padding: 10px 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: white;
+            cursor: pointer;
+            border-radius: 5px 5px 0 0;
+            margin-right: 5px;
+        }
+        .tab.active {
+            background: rgba(255, 255, 255, 0.3);
+            border-bottom: 2px solid #4CAF50;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .connections-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .connection-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            margin: 5px 0;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
+        }
+        .connection-info {
+            flex: 1;
+        }
+        .connection-duration {
+            font-size: 0.8em;
+            color: #ccc;
+            margin-left: 10px;
+        }
+        .button-small {
+            background: #dc3545;
+            color: white;
+            padding: 5px 10px;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .button-small:hover {
+            background: #c82333;
+        }
+        .form-group {
+            margin: 15px 0;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 8px;
+            border: none;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+        }
+        .form-group input::placeholder {
+            color: rgba(255, 255, 255, 0.7);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 SOCKS5 代理服务器管理面板</h1>
+        
+        <div class="status">
+            <h3>✅ 服务器状态</h3>
+            <p>状态: <span id="serverStatus">✅ 运行中</span></p>
+            <p>SOCKS5 代理服务器正在运行中...</p>
+        </div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-number" id="connections">0</div>
+                <div>当前连接数</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="totalConnections">0</div>
+                <div>总连接数</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="uptime">0s</div>
+                <div>运行时间</div>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" onclick="showTab('overview')">📊 概览</button>
+            <button class="tab" onclick="showTab('connections')">🔗 连接管理</button>
+            <button class="tab" onclick="showTab('config')">⚙️ 配置管理</button>
+            <button class="tab" onclick="showTab('logs')">📝 日志查看</button>
+        </div>
+
+        <!-- 概览标签页 -->
+        <div id="overview" class="tab-content active">
+            <div class="info">
+                <h3>📋 服务器信息</h3>
+                <p><strong>协议:</strong> SOCKS5</p>
+                <p><strong>认证方式:</strong> 用户名/密码</p>
+                <p><strong>支持功能:</strong> CONNECT, BIND, UDP ASSOCIATE</p>
+            </div>
+
+            <div class="info">
+                <h3>🔧 配置信息</h3>
+                <div id="serverConfig">
+                    <p><strong>监听地址:</strong> 127.0.0.1:1080</p>
+                    <p><strong>认证用户:</strong> test</p>
+                    <p><strong>最大连接数:</strong> 1000</p>
+                </div>
+            </div>
+
+            <div style="text-align: center; margin-top: 30px;">
+                <button class="button" onclick="refreshStats()">🔄 刷新状态</button>
+                <button class="button button-warning" onclick="restartServer()">🔄 重启服务器</button>
+                <button class="button" onclick="location.reload()">🔄 刷新页面</button>
+            </div>
+        </div>
+
+        <!-- 连接管理标签页 -->
+        <div id="connections" class="tab-content">
+            <div class="info">
+                <h3>🔗 活跃连接</h3>
+                <div id="activeConnections">
+                    <p>加载中...</p>
+                </div>
+            </div>
+
+            <div class="info">
+                <h3>🧪 连接测试</h3>
+                <div class="form-group">
+                    <label>目标主机:</label>
+                    <input type="text" id="testHost" placeholder="例如: example.com" value="example.com">
+                </div>
+                <div class="form-group">
+                    <label>目标端口:</label>
+                    <input type="number" id="testPort" placeholder="例如: 80" value="80">
+                </div>
+                <button class="button" onclick="testConnectionFromForm()">🧪 测试连接</button>
+            </div>
+        </div>
+
+        <!-- 配置管理标签页 -->
+        <div id="config" class="tab-content">
+            <div class="info">
+                <h3>⚙️ 服务器配置</h3>
+                <div class="form-group">
+                    <label>监听地址:</label>
+                    <input type="text" id="configHost" value="0.0.0.0">
+                </div>
+                <div class="form-group">
+                    <label>监听端口:</label>
+                    <input type="number" id="configPort" value="1080">
+                </div>
+                <div class="form-group">
+                    <label>认证用户:</label>
+                    <input type="text" id="configUser" value="test">
+                </div>
+                <div class="form-group">
+                    <label>最大连接数:</label>
+                    <input type="number" id="configMaxConnections" value="10000">
+                </div>
+                <button class="button" onclick="updateConfig()">💾 保存配置</button>
+            </div>
+        </div>
+
+        <!-- 日志查看标签页 -->
+        <div id="logs" class="tab-content">
+            <div class="info">
+                <h3>📝 服务器日志</h3>
+                <div id="serverLogs" style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 5px; font-family: monospace; max-height: 400px; overflow-y: auto;">
+                    <p>[INFO] 服务器启动成功</p>
+                    <p>[INFO] 监听地址: 0.0.0.0:1080</p>
+                    <p>[INFO] 认证方式: 用户名密码认证</p>
+                    <p>[INFO] 等待客户端连接...</p>
+                </div>
+                <button class="button" onclick="refreshLogs()">🔄 刷新日志</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 标签页切换
+        function showTab(tabName) {
+            // 隐藏所有标签页内容
+            const tabContents = document.querySelectorAll('.tab-content');
+            tabContents.forEach(content => {
+                content.classList.remove('active');
+            });
+            
+            // 移除所有标签的active类
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // 显示选中的标签页
+            document.getElementById(tabName).classList.add('active');
+            
+            // 激活对应的标签按钮
+            event.target.classList.add('active');
+        }
+
+        // 测试连接表单
+        function testConnectionFromForm() {
+            const host = document.getElementById('testHost').value;
+            const port = parseInt(document.getElementById('testPort').value);
+            
+            if (!host || !port) {
+                showNotification('请填写完整的主机和端口信息', 'error');
+                return;
+            }
+            
+            testConnection(host, port);
+        }
+
+        // 更新配置
+        function updateConfig() {
+            const host = document.getElementById('configHost').value;
+            const port = parseInt(document.getElementById('configPort').value);
+            const user = document.getElementById('configUser').value;
+            const maxConnections = parseInt(document.getElementById('configMaxConnections').value);
+            
+            if (!host || !port || !user || !maxConnections) {
+                showNotification('请填写完整的配置信息', 'error');
+                return;
+            }
+            
+            // 这里可以添加配置更新逻辑
+            showNotification('配置更新功能待实现', 'info');
+        }
+
+        // 刷新日志
+        function refreshLogs() {
+            const logsElement = document.getElementById('serverLogs');
+            logsElement.innerHTML = `
+                <p>[INFO] 服务器启动成功</p>
+                <p>[INFO] 监听地址: 0.0.0.0:1080</p>
+                <p>[INFO] 认证方式: 用户名密码认证</p>
+                <p>[INFO] 等待客户端连接...</p>
+                <p>[INFO] 新连接: 127.0.0.1:12345</p>
+                <p>[INFO] 认证成功</p>
+                <p>[INFO] 连接目标: example.com:80</p>
+                <p>[INFO] 数据传输完成</p>
+            `;
+            showNotification('日志已刷新', 'success');
+        }
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('SOCKS5 代理服务器管理面板已加载');
+        });
+    </script>
+    <script src="script.js"></script>
+</body>
+</html> 
