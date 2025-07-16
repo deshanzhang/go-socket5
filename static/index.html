@@ -263,7 +263,7 @@
                     <label>最大连接数:</label>
                     <input type="number" id="configMaxConnections" value="10000">
                 </div>
-                <button class="button" onclick="updateConfig()">💾 保存配置</button>
+                <button class="button" onclick="updateConfigFromForm()">💾 保存配置</button>
             </div>
         </div>
 
@@ -277,7 +277,7 @@
                     <p>[INFO] 认证方式: 用户名密码认证</p>
                     <p>[INFO] 等待客户端连接...</p>
                 </div>
-                <button class="button" onclick="refreshLogs()">🔄 刷新日志</button>
+                <button class="button" onclick="refreshLogsFromForm()">🔄 刷新日志</button>
             </div>
         </div>
     </div>
@@ -318,7 +318,7 @@
         }
 
         // 更新配置
-        function updateConfig() {
+        function updateConfigFromForm() {
             const host = document.getElementById('configHost').value;
             const port = parseInt(document.getElementById('configPort').value);
             const user = document.getElementById('configUser').value;
@@ -329,24 +329,14 @@
                 return;
             }
             
-            // 这里可以添加配置更新逻辑
-            showNotification('配置更新功能待实现', 'info');
+            // 调用JavaScript中的updateConfig函数
+            window.updateConfig();
         }
 
         // 刷新日志
-        function refreshLogs() {
-            const logsElement = document.getElementById('serverLogs');
-            logsElement.innerHTML = `
-                <p>[INFO] 服务器启动成功</p>
-                <p>[INFO] 监听地址: 0.0.0.0:1080</p>
-                <p>[INFO] 认证方式: 用户名密码认证</p>
-                <p>[INFO] 等待客户端连接...</p>
-                <p>[INFO] 新连接: 127.0.0.1:12345</p>
-                <p>[INFO] 认证成功</p>
-                <p>[INFO] 连接目标: example.com:80</p>
-                <p>[INFO] 数据传输完成</p>
-            `;
-            showNotification('日志已刷新', 'success');
+        function refreshLogsFromForm() {
+            // 调用JavaScript中的refreshLogs函数
+            window.refreshLogs();
         }
 
         // 页面加载完成后初始化
@@ -354,6 +344,6 @@
             console.log('SOCKS5 代理服务器管理面板已加载');
         });
     </script>
-    <script src="script.js"></script>
+    <script src="/static/script.js"></script>
 </body>
 </html> 

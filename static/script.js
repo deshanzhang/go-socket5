@@ -17,6 +17,7 @@ let serverConfig = {
 };
 
 let activeConnections = [];
+let serverLogs = [];
 
 // 更新运行时间
 function updateUptime() {
@@ -64,6 +65,7 @@ async function fetchServerConfig() {
             const config = await response.json();
             serverConfig = { ...serverConfig, ...config };
             updateConfigDisplay();
+            updateConfigForm();
         }
     } catch (error) {
         console.log('无法获取服务器配置:', error);
@@ -81,6 +83,60 @@ async function fetchActiveConnections() {
         }
     } catch (error) {
         console.log('无法获取活跃连接:', error);
+    }
+}
+
+// 获取服务器日志
+async function fetchServerLogs() {
+    try {
+        const response = await fetch('/api/logs?limit=100');
+        if (response.ok) {
+            const data = await response.json();
+            serverLogs = data.logs || [];
+            updateLogsDisplay();
+        }
+    } catch (error) {
+        console.log('无法获取服务器日志:', error);
+        // 使用模拟日志数据
+        serverLogs = [
+            '[INFO] 服务器启动成功',
+            '[INFO] 监听地址: 0.0.0.0:1080',
+            '[INFO] 认证方式: 用户名密码认证',
+            '[INFO] 等待客户端连接...',
+            '[INFO] 新连接: 127.0.0.1:12345',
+            '[INFO] 认证成功',
+            '[INFO] 连接目标: example.com:80',
+            '[INFO] 数据传输完成'
+        ];
+        updateLogsDisplay();
+    }
+}
+
+// 更新服务器配置
+async function updateServerConfig(newConfig) {
+    try {
+        const response = await fetch('/api/config', {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(newConfig)
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            showNotification('配置更新成功', 'success');
+            fetchServerConfig(); // 重新获取配置
+            return true;
+        } else {
+            const error = await response.json();
+            showNotification(`配置更新失败: ${error.error}`, 'error');
+            return false;
+        }
+    } catch (error) {
+        console.log('配置更新失败:', error);
+        showNotification('配置更新失败', 'error');
+        return false;
     }
 }
 
@@ -116,6 +172,19 @@ function updateConfigDisplay() {
     }
 }
 
+// 更新配置表单
+function updateConfigForm() {
+    const hostElement = document.getElementById('configHost');
+    const portElement = document.getElementById('configPort');
+    const userElement = document.getElementById('configUser');
+    const maxConnectionsElement = document.getElementById('configMaxConnections');
+    
+    if (hostElement) hostElement.value = serverConfig.host;
+    if (portElement) portElement.value = serverConfig.port;
+    if (userElement) userElement.value = serverConfig.user;
+    if (maxConnectionsElement) maxConnectionsElement.value = serverConfig.maxConnections;
+}
+
 // 更新连接显示
 function updateConnectionsDisplay() {
     const connectionsElement = document.getElementById('activeConnections');
@@ -142,6 +211,26 @@ function updateConnectionsDisplay() {
         });
         html += '</div>';
         connectionsElement.innerHTML = html;
+    }
+}
+
+// 更新日志显示
+function updateLogsDisplay() {
+    const logsElement = document.getElementById('serverLogs');
+    if (logsElement) {
+        if (serverLogs.length === 0) {
+            logsElement.innerHTML = '<p>暂无日志</p>';
+            return;
+        }
+        
+        let html = '';
+        serverLogs.forEach(log => {
+            html += `<p>${log}</p>`;
+        });
+        logsElement.innerHTML = html;
+        
+        // 滚动到底部
+        logsElement.scrollTop = logsElement.scrollHeight;
     }
 }
 
@@ -229,7 +318,38 @@ function refreshStats() {
     fetchServerStats();
     fetchServerConfig();
     fetchActiveConnections();
+    fetchServerLogs();
     showNotification('状态已刷新', 'success');
+}
+
+// 刷新日志
+function refreshLogs() {
+    fetchServerLogs();
+    showNotification('日志已刷新', 'success');
+}
+
+// 更新配置
+async function updateConfig() {
+    const host = document.getElementById('configHost').value;
+    const port = parseInt(document.getElementById('configPort').value);
+    const user = document.getElementById('configUser').value;
+    const maxConnections = parseInt(document.getElementById('configMaxConnections').value);
+    
+    if (!host || !port || !user || !maxConnections) {
+        showNotification('请填写完整的配置信息', 'error');
+        return;
+    }
+    
+    const newConfig = {
+        host: host,
+        port: port,
+        user: user,
+        maxConnections: maxConnections,
+        authMethods: serverConfig.authMethods,
+        blackList: serverConfig.blackList
+    };
+    
+    await updateServerConfig(newConfig);
 }
 
 // 显示通知
@@ -349,11 +469,13 @@ document.addEventListener('DOMContentLoaded', function() {
     fetchServerStats();
     fetchServerConfig();
     fetchActiveConnections();
+    fetchServerLogs();
     
     // 设置定时器
     setInterval(updateUptime, 1000);
     setInterval(fetchServerStats, 5000);
     setInterval(fetchActiveConnections, 10000);
+    setInterval(fetchServerLogs, 30000); // 30秒刷新一次日志
     
     // 绑定按钮事件
     const refreshButtons = document.querySelectorAll('[onclick="refreshStats()"]');
@@ -372,4 +494,6 @@ window.refreshStats = refreshStats;
 window.showNotification = showNotification;
 window.disconnectConnection = disconnectConnection;
 window.testConnection = testConnection;
-window.restartServer = restartServer; 
+window.restartServer = restartServer;
+window.refreshLogs = refreshLogs;
+window.updateConfig = updateConfig; 
