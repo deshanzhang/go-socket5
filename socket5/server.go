@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"go-socket5/server"
 	"log"
 	"net"
 	"strconv"
@@ -28,6 +27,8 @@ const (
 	ReadTimeout              = 10 * time.Second
 	WriteTimeout             = 10 * time.Second
 )
+
+var ServerClient *Server
 
 // Server SOCKS5服务器结构体
 type Server struct {
@@ -93,12 +94,6 @@ func (rl *RateLimiter) Allow() bool {
 	}
 }
 
-// User 用户结构体
-type User struct {
-	Name     []byte // 用户名
-	Password []byte // 密码
-}
-
 // Config 服务器配置结构体
 type Config struct {
 	Host      string   // 监听地址
@@ -109,6 +104,11 @@ type Config struct {
 
 // Start 启动SOCKS5服务器
 func (s *Server) Start() (err error) {
+	// 验证认证配置
+	if err := s.validateAuthConfig(); err != nil {
+		return fmt.Errorf("认证配置验证失败: %v", err)
+	}
+
 	// 初始化上下文和限流器
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.rateLimiter = NewRateLimiter(100*time.Millisecond, 1000) // 每秒1000个连接
@@ -126,9 +126,6 @@ func (s *Server) Start() (err error) {
 	}
 
 	log.Printf("%s 服务器启动成功，等待连接...", LogPrefixServer)
-
-	// 启动连接监控
-	go s.monitorConnections()
 
 	for {
 		accept, err := s.listen.Accept()
@@ -155,26 +152,37 @@ func (s *Server) Start() (err error) {
 			continue
 		}
 
+		// 为每个连接启动goroutine处理
 		go s.handleConnection(accept)
 	}
 }
 
-// monitorConnections 监控连接数
-func (s *Server) monitorConnections() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+// handleConnection 处理客户端连接
+func (s *Server) handleConnection(conn net.Conn) {
+	defer func() {
+		conn.Close()
+		s.decrementConnCount()
+		log.Printf("%s 连接关闭: %v", LogPrefixServer, conn.RemoteAddr())
+	}()
 
-	for {
-		select {
-		case <-ticker.C:
-			count := s.getConnCount()
-			log.Printf("%s 当前连接数: %d", LogPrefixServer, count)
-			// 更新HTTP服务器统计
-			server.UpdateConnectionCount(int(count))
-		case <-s.ctx.Done():
-			return
-		}
+	log.Printf("%s 新连接: %v", LogPrefixServer, conn.RemoteAddr())
+
+	// 设置连接超时
+	conn.SetDeadline(time.Now().Add(ConnectionTimeout))
+
+	// 执行认证
+	if err := s.auth(conn); err != nil {
+		log.Printf("%s 认证失败: %v", LogPrefixServer, err)
+		return
 	}
+
+	log.Printf("%s 认证完成，开始处理SOCKS5请求: %v", LogPrefixServer, conn.RemoteAddr())
+
+	// 清除超时，进入正常数据转发模式
+	conn.SetDeadline(time.Time{})
+
+	// 处理SOCKS5请求
+	s.handleSocks5Request(conn)
 }
 
 // incrementConnCount 增加连接数
@@ -206,36 +214,149 @@ func (s *Server) getConnCount() int32 {
 	return s.connCount
 }
 
-// handleConnection 处理连接
-func (s *Server) handleConnection(conn net.Conn) {
-	defer func() {
-		s.decrementConnCount()
-		// 更新HTTP服务器统计
-		server.UpdateConnectionCount(int(s.getConnCount()))
-		if conn != nil {
-			conn.Close()
-		}
-	}()
-
-	// 设置连接超时
-	conn.SetDeadline(time.Now().Add(ConnectionTimeout))
-
-	log.Printf("%s 新连接: %v", LogPrefixServer, conn.RemoteAddr())
-
-	// 认证
-	err := s.auth(conn)
+// auth 处理客户端认证
+func (s *Server) auth(conn net.Conn) error {
+	bytes := make([]byte, 16)
+	read, err := conn.Read(bytes)
 	if err != nil {
-		log.Printf("%s 认证失败: %v", LogPrefixServer, err)
-		return
+		log.Printf("%s 认证阶段读取失败: %v", LogPrefixServer, err)
+		return err
+	}
+	bytes = bytes[:read]
+	log.Printf("%s 收到认证请求: %x", LogPrefixServer, bytes)
+
+	if len(bytes) < 3 {
+		return errors.New("认证请求长度不足")
 	}
 
-	log.Printf("%s 认证成功", LogPrefixServer)
+	version := bytes[0]
+	if version != Version {
+		return fmt.Errorf("协议版本不匹配: 期望 %d, 实际 %d", Version, version)
+	}
 
-	// 增加总连接数统计
-	server.IncrementTotalConnections()
+	methodCount := int(bytes[1])
+	if len(bytes) < 2+methodCount {
+		return errors.New("认证方法数量不匹配")
+	}
 
-	// 处理SOCKS5请求
-	s.handleSocks5Request(conn)
+	methods := bytes[2 : 2+methodCount]
+	log.Printf("%s 客户端支持的认证方法: %v", LogPrefixServer, methods)
+
+	// 选择认证方法 - 按服务器配置的优先级选择客户端支持的方法
+	var selectedMethod uint8 = 0xFF // 初始化为无效值，避免与NoAuthenticationRequired冲突
+
+	// 按服务器配置的优先级顺序选择认证方法
+	for _, supportedMethod := range s.Config.AuthList {
+		for _, clientMethod := range methods {
+			if supportedMethod == clientMethod {
+				selectedMethod = supportedMethod
+				break
+			}
+		}
+		if selectedMethod != 0xFF {
+			break
+		}
+	}
+
+	if selectedMethod == 0xFF {
+		log.Printf("%s 没有找到支持的认证方法，服务器支持: %v, 客户端支持: %v", LogPrefixServer, s.Config.AuthList, methods)
+		conn.Write([]byte{Version, 0xFF}) // 0xFF表示没有可接受的认证方法
+		return errors.New("没有支持的认证方法")
+	}
+
+	// 发送认证方法选择响应
+	conn.Write([]byte{Version, selectedMethod})
+	log.Printf("%s 选择认证方法: %s (0x%02x)", LogPrefixServer, GetAuthMethodName(selectedMethod), selectedMethod)
+
+	// 处理具体的认证方法
+	switch selectedMethod {
+	case NoAuthenticationRequired:
+		log.Printf("%s 无需认证", LogPrefixServer)
+		return nil
+	case AccountPasswordAuthentication:
+		return s.handlePasswordAuth(conn)
+	default:
+		return fmt.Errorf("不支持的认证方法: %d", selectedMethod)
+	}
+}
+
+// validateAuthConfig 验证认证配置
+func (s *Server) validateAuthConfig() error {
+	warnings := ValidateAuthConfig(s.Config.AuthList, s.UserMap)
+
+	for _, warning := range warnings {
+		if warning == "认证方法列表为空" || warning == "没有有效的认证方法" {
+			return errors.New(warning)
+		}
+		log.Printf("%s 配置警告: %s", LogPrefixServer, warning)
+	}
+
+	// 打印认证配置信息
+	log.Printf("%s 认证配置:", LogPrefixServer)
+	for i, method := range s.Config.AuthList {
+		log.Printf("%s   %d. %s (0x%02x)", LogPrefixServer, i+1, GetAuthMethodName(method), method)
+	}
+
+	if len(s.UserMap) > 0 {
+		log.Printf("%s 配置了 %d 个用户账户", LogPrefixServer, len(s.UserMap))
+	}
+
+	return nil
+}
+
+// handlePasswordAuth 处理用户名密码认证
+func (s *Server) handlePasswordAuth(conn net.Conn) error {
+	bytes := make([]byte, 1024)
+	read, err := conn.Read(bytes)
+	if err != nil {
+		log.Printf("%s 读取认证数据失败: %v", LogPrefixServer, err)
+		return err
+	}
+	bytes = bytes[:read]
+	log.Printf("%s 收到认证数据: %x", LogPrefixServer, bytes)
+
+	if len(bytes) < 3 {
+		return errors.New("认证数据长度不足")
+	}
+
+	version := bytes[0]
+	if version != 0x01 {
+		return fmt.Errorf("认证子协议版本不匹配: 期望 1, 实际 %d", version)
+	}
+
+	usernameLen := int(bytes[1])
+	if len(bytes) < 2+usernameLen+1 {
+		return errors.New("用户名长度不匹配")
+	}
+
+	username := string(bytes[2 : 2+usernameLen])
+	passwordLen := int(bytes[2+usernameLen])
+
+	if len(bytes) < 2+usernameLen+1+passwordLen {
+		return errors.New("密码长度不匹配")
+	}
+
+	password := string(bytes[3+usernameLen : 3+usernameLen+passwordLen])
+
+	log.Printf("%s 认证信息 - 用户名: %s, 密码: %s", LogPrefixServer, username, password)
+
+	// 验证用户名密码
+	expectedPassword, exists := s.UserMap[username]
+	if !exists {
+		log.Printf("%s 认证失败 - 用户不存在: %s", LogPrefixServer, username)
+		conn.Write([]byte{0x01, 0x01}) // 认证失败
+		return errors.New("用户不存在")
+	}
+
+	if expectedPassword != password {
+		log.Printf("%s 认证失败 - 密码错误，用户名: %s", LogPrefixServer, username)
+		conn.Write([]byte{0x01, 0x01}) // 认证失败
+		return errors.New("密码错误")
+	}
+
+	log.Printf("%s 认证成功 - 用户名: %s", LogPrefixServer, username)
+	conn.Write([]byte{0x01, 0x00}) // 认证成功
+	return nil
 }
 
 // handleSocks5Request 处理SOCKS5请求
@@ -502,115 +623,55 @@ func (s *Server) handleUDPProxy(tcpConn net.Conn, udpListener *net.UDPConn) {
 	}
 }
 
-// auth 处理客户端认证
-func (s *Server) auth(conn net.Conn) error {
-	bytes := make([]byte, 16)
-	read, err := conn.Read(bytes)
-	if err != nil {
-		log.Printf("%s 认证阶段读取失败: %v", LogPrefixServer, err)
-		return err
-	}
-	bytes = bytes[:read]
-	log.Printf("%s 收到认证请求: %x", LogPrefixServer, bytes)
-
-	if len(bytes) < 3 {
-		return errors.New("认证请求长度不足")
-	}
-
-	version := bytes[0]
-	if version != Version {
-		return fmt.Errorf("协议版本不匹配: 期望 %d, 实际 %d", Version, version)
-	}
-
-	methodCount := int(bytes[1])
-	if len(bytes) < 2+methodCount {
-		return errors.New("认证方法数量不匹配")
-	}
-
-	methods := bytes[2 : 2+methodCount]
-	log.Printf("%s 客户端支持的认证方法: %v", LogPrefixServer, methods)
-
-	// 选择认证方法
-	var selectedMethod uint8
-	for _, method := range methods {
-		for _, supportedMethod := range s.Config.AuthList {
-			if method == supportedMethod {
-				selectedMethod = method
-				break
-			}
-		}
-		if selectedMethod != 0 {
-			break
-		}
-	}
-
-	if selectedMethod == 0 {
-		log.Printf("%s 没有找到支持的认证方法", LogPrefixServer)
-		conn.Write([]byte{Version, 0xFF}) // 0xFF表示没有可接受的认证方法
-		return errors.New("没有支持的认证方法")
-	}
-
-	// 发送认证方法选择响应
-	conn.Write([]byte{Version, selectedMethod})
-	log.Printf("%s 选择认证方法: %d", LogPrefixServer, selectedMethod)
-
-	// 处理具体的认证方法
-	switch selectedMethod {
-	case NoAuthenticationRequired:
-		log.Printf("%s 无需认证", LogPrefixServer)
-		return nil
-	case AccountPasswordAuthentication:
-		return s.handlePasswordAuth(conn)
-	default:
-		return fmt.Errorf("不支持的认证方法: %d", selectedMethod)
-	}
+type ConfigInput struct {
+	IpAddress string `json:"ip_address"`
+	User      string `json:"user"`
+	Password  string `json:"password"`
+	Port      int64  `json:"port"`
 }
 
-// handlePasswordAuth 处理用户名密码认证
-func (s *Server) handlePasswordAuth(conn net.Conn) error {
-	bytes := make([]byte, 1024)
-	read, err := conn.Read(bytes)
-	if err != nil {
-		log.Printf("%s 读取认证数据失败: %v", LogPrefixServer, err)
-		return err
-	}
-	bytes = bytes[:read]
-	log.Printf("%s 收到认证数据: %x", LogPrefixServer, bytes)
+// TestConnection 测试实际连接功能
+func TestConnection(client Client, urls []string) error {
+	fmt.Println("测试实际网络连接...")
+	// 尝试连接百度
+	for _, url := range urls {
+		conn, err := client.TcpProxy(url, 80)
+		if err != nil {
+			fmt.Printf("❌ 连接失败: %v\n", err)
+			return err
+		}
 
-	if len(bytes) < 3 {
-		return errors.New("认证数据长度不足")
-	}
+		fmt.Printf("✅ 连接成功！\n")
+		fmt.Printf("本地地址: %s\n", conn.LocalAddr())
+		fmt.Printf("远程地址: %s\n", conn.RemoteAddr())
 
-	version := bytes[0]
-	if version != 0x01 {
-		return fmt.Errorf("认证子协议版本不匹配: 期望 1, 实际 %d", version)
-	}
+		// 发送简单的HTTP请求
+		httpRequest := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", url)
+		_, err = conn.Write([]byte(httpRequest))
+		if err != nil {
+			fmt.Printf("❌ 发送HTTP请求失败: %v\n", err)
+			conn.Close()
+			return err
+		}
 
-	usernameLen := int(bytes[1])
-	if len(bytes) < 2+usernameLen+1 {
-		return errors.New("用户名长度不匹配")
-	}
+		// 读取响应
+		buffer := make([]byte, 1024)
+		n, err := conn.Read(buffer)
+		if err != nil {
+			fmt.Printf("❌ 读取响应失败: %v\n", err)
+		} else {
+			fmt.Printf("✅ 收到响应 (%d 字节)\n", n)
+			// 只显示前100个字符，避免日志过长
+			response := string(buffer[:n])
+			if len(response) > 100 {
+				response = response[:100] + "..."
+			}
+			fmt.Printf("响应内容: %s\n", response)
+		}
 
-	username := string(bytes[2 : 2+usernameLen])
-	passwordLen := int(bytes[2+usernameLen])
-
-	if len(bytes) < 2+usernameLen+1+passwordLen {
-		return errors.New("密码长度不匹配")
-	}
-
-	password := string(bytes[3+usernameLen : 3+usernameLen+passwordLen])
-
-	log.Printf("%s 认证信息 - 用户名: %s, 密码: %s", LogPrefixServer, username, password)
-
-	// 验证用户名密码
-	expectedPassword, exists := s.UserMap[username]
-	if !exists || expectedPassword != password {
-		log.Printf("%s 认证失败 - 用户名: %s", LogPrefixServer, username)
-		conn.Write([]byte{0x01, 0x01}) // 认证失败
-		return errors.New("用户名或密码错误")
+		conn.Close()
 	}
 
-	log.Printf("%s 认证成功 - 用户名: %s", LogPrefixServer, username)
-	conn.Write([]byte{0x01, 0x00}) // 认证成功
+	fmt.Println("✅ 实际连接测试完成")
 	return nil
 }

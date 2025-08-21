@@ -16,10 +16,10 @@ import (
 
 // Client SOCKS5客户端结构体
 type Client struct {
-	Host     string // SOCKS5服务器地址
-	Port     uint16 // SOCKS5服务器端口
-	UserName string // 用户名（可选）
-	Password string // 密码（可选）
+	Host     string `json:"host"`     // SOCKS5服务器地址
+	Port     uint16 `json:"port"`     // SOCKS5服务器端口
+	UserName string `json:"username"` // 用户名（可选）
+	Password string `json:"password"` // 密码（可选）
 }
 
 // AuthPackage 用于组织认证方法的结构体
@@ -55,19 +55,33 @@ func (c *Client) conn() (net.Conn, error) {
 // auth 执行SOCKS5认证流程
 func (c *Client) auth(conn net.Conn) error {
 	log.Printf("%s 开始认证，用户名: %s, 密码: %s", LogPrefixClient, c.UserName, c.Password)
-	//组织发送支持的认证方法
-	authPackage := AuthPackage{}
+
+	// 组织发送支持的认证方法
+	var methods []uint8
+
+	// 如果提供了用户名和密码，优先支持用户名密码认证
 	if c.UserName != "" && c.Password != "" {
-		authPackage.addMethod(AccountPasswordAuthentication)
+		methods = append(methods, AccountPasswordAuthentication)
+		// 如果有用户名密码，也支持无认证作为备选
+		methods = append(methods, NoAuthenticationRequired)
+	} else {
+		// 如果没有提供用户名密码，只支持无认证
+		methods = append(methods, NoAuthenticationRequired)
 	}
-	authPackage.addMethod(NoAuthenticationRequired)
-	authData := authPackage.toData()
+
+	// 构建认证请求
+	authData := make([]byte, 0, 2+len(methods))
+	authData = append(authData, Version, uint8(len(methods)))
+	authData = append(authData, methods...)
+
 	log.Printf("%s 发送认证方法: %x", LogPrefixClient, authData)
 	_, err := conn.Write(authData)
 	if err != nil {
 		log.Printf("%s 发送认证方法失败: %v", LogPrefixClient, err)
 		return err
 	}
+
+	// 读取服务器认证方法选择响应
 	data := make([]byte, 2)
 	l, err := conn.Read(data)
 	if err != nil {
@@ -78,56 +92,75 @@ func (c *Client) auth(conn net.Conn) error {
 		log.Printf("%s 认证响应长度错误: %d", LogPrefixClient, l)
 		return errors.New("返回数据有误非两个字节")
 	}
+
 	log.Printf("%s 收到认证响应: %x", LogPrefixClient, data)
 	if data[0] != Version {
 		log.Printf("%s 协议版本不匹配: %x", LogPrefixClient, data[0])
 		return errors.New("当前协议Socks5与服务端协议不匹配")
 	}
-	buffer := bytes.Buffer{}
+
+	// 处理服务器选择的认证方法
 	switch data[1] {
 	case NoAuthenticationRequired:
 		log.Printf("%s 服务器选择无需认证", LogPrefixClient)
 		return nil
+
 	case AccountPasswordAuthentication:
 		log.Printf("%s 服务器选择用户名密码认证", LogPrefixClient)
-		//认证协议 0x01
-		buffer.WriteByte(0x01)
-		//用户名长度
-		buffer.WriteByte(byte(len(c.UserName)))
-		//用户名
-		buffer.WriteString(c.UserName)
-		//密码长度
-		buffer.WriteByte(byte(len(c.Password)))
-		//密码
-		buffer.WriteString(c.Password)
+		if c.UserName == "" || c.Password == "" {
+			log.Printf("%s 服务器要求用户名密码认证，但客户端未提供有效凭据", LogPrefixClient)
+			return errors.New("服务器要求用户名密码认证，但客户端未提供有效凭据")
+		}
+
+		// 发送用户名密码认证数据
+		buffer := bytes.Buffer{}
+		buffer.WriteByte(0x01)                  // 认证子协议版本
+		buffer.WriteByte(byte(len(c.UserName))) // 用户名长度
+		buffer.WriteString(c.UserName)          // 用户名
+		buffer.WriteByte(byte(len(c.Password))) // 密码长度
+		buffer.WriteString(c.Password)          // 密码
+
 		authData := buffer.Bytes()
 		log.Printf("%s 发送用户名密码: %x", LogPrefixClient, authData)
+
+		_, err = conn.Write(authData)
+		if err != nil {
+			log.Printf("%s 发送用户名密码失败: %v", LogPrefixClient, err)
+			return err
+		}
+
+		// 读取认证结果
+		l, err = conn.Read(data)
+		if err != nil {
+			log.Printf("%s 读取认证结果失败: %v", LogPrefixClient, err)
+			return err
+		}
+		if l != 2 {
+			log.Printf("%s 认证结果长度错误: %d", LogPrefixClient, l)
+			return errors.New("返回数据有误非两个字节")
+		}
+
+		log.Printf("%s 收到认证结果: %x", LogPrefixClient, data)
+		if data[0] != 0x01 {
+			log.Printf("%s 认证协议不匹配: %x", LogPrefixClient, data[0])
+			return errors.New("当前认证协议Socks5与服务端协议不匹配")
+		}
+		if data[1] > 0 {
+			log.Printf("%s 用户名密码认证失败，错误码: %x", LogPrefixClient, data[1])
+			return fmt.Errorf("用户名密码认证失败，错误码: %x", data[1])
+		}
+
+		log.Printf("%s 认证成功", LogPrefixClient)
+		return nil
+
+	case 0xFF:
+		log.Printf("%s 服务器拒绝所有认证方法", LogPrefixClient)
+		return errors.New("服务器拒绝所有认证方法")
+
+	default:
+		log.Printf("%s 服务器选择不支持的认证方法: %x", LogPrefixClient, data[1])
+		return errors.New("服务器选择不支持的认证方法")
 	}
-	_, err = conn.Write(buffer.Bytes())
-	if err != nil {
-		log.Printf("%s 发送用户名密码失败: %v", LogPrefixClient, err)
-		return err
-	}
-	l, err = conn.Read(data)
-	if err != nil {
-		log.Printf("%s 读取认证结果失败: %v", LogPrefixClient, err)
-		return err
-	}
-	if l != 2 {
-		log.Printf("%s 认证结果长度错误: %d", LogPrefixClient, l)
-		return errors.New("返回数据有误非两个字节")
-	}
-	log.Printf("%s 收到认证结果: %x", LogPrefixClient, data)
-	if data[0] != 0x01 {
-		log.Printf("%s 认证协议不匹配: %x", LogPrefixClient, data[0])
-		return errors.New("当前认证协议Socks5与服务端协议不匹配")
-	}
-	if data[1] > 0 {
-		log.Printf("%s 认证失败: %x", LogPrefixClient, data[1])
-		return errors.New("认证失败")
-	}
-	log.Printf("%s 认证成功", LogPrefixClient)
-	return nil
 }
 
 // UdpProxy UDP代理结构体
@@ -197,63 +230,18 @@ func (c *Client) requisition(conn net.Conn, host string, port uint16, cmd uint8)
 		if len(rdata) == 4 {
 			log.Printf("%s CONNECT响应只有4字节，需要读取更多数据", LogPrefixClient)
 			// 需要读取额外的地址信息
-			_, err := conn.Read(buf)
+			additionalData := make([]byte, 1024)
+			additionalRead, err := conn.Read(additionalData)
 			if err != nil {
-				log.Printf("%s 读取CONNECT响应额外数据失败: %v", LogPrefixClient, err)
+				log.Printf("%s 读取额外地址信息失败: %v", LogPrefixClient, err)
 				return nil, err
 			}
-			// 这里我们不需要解析地址，因为CONNECT命令只是建立连接
+			rdata = append(rdata, additionalData[:additionalRead]...)
+			log.Printf("%s 完整CONNECT响应: %x", LogPrefixClient, rdata)
 		}
-		// CONNECT命令成功，返回nil表示连接已建立
-		log.Printf("%s CONNECT命令成功", LogPrefixClient)
-		return nil, nil
 	}
 
-	if cmd == UDP {
-		log.Printf("%s 处理UDP响应", LogPrefixClient)
-		// UDP命令需要解析返回的绑定地址
-		var bindAddr string
-		if len(rdata) == 4 {
-			// 需要读取额外的地址信息
-			log.Printf("%s UDP响应只有4字节，需要读取更多数据", LogPrefixClient)
-			n, err := conn.Read(buf)
-			if err != nil {
-				log.Printf("%s 读取UDP响应额外数据失败: %v", LogPrefixClient, err)
-				return nil, err
-			}
-			bindAddr, err = addressResolutionFormByteArray(buf[:n], buf[0])
-			if err != nil {
-				log.Printf("%s UDP地址解析失败: %v", LogPrefixClient, err)
-				return nil, err
-			}
-		} else {
-			// 地址信息在响应中
-			log.Printf("%s UDP地址信息在响应中", LogPrefixClient)
-			bindAddr, err = addressResolutionFormByteArray(rdata[4:], rdata[3])
-			if err != nil {
-				log.Printf("%s UDP地址解析失败: %v", LogPrefixClient, err)
-				return nil, err
-			}
-		}
-
-		log.Printf("%s UDP绑定地址: %s", LogPrefixClient, bindAddr)
-		// 创建UDP连接
-		udpAddr, err := net.ResolveUDPAddr("udp", bindAddr)
-		if err != nil {
-			log.Printf("%s 解析UDP地址失败: %v", LogPrefixClient, err)
-			return nil, err
-		}
-
-		udpConn, err := net.DialUDP("udp", nil, udpAddr)
-		if err != nil {
-			log.Printf("%s 创建UDP连接失败: %v", LogPrefixClient, err)
-			return nil, err
-		}
-
-		log.Printf("%s UDP连接创建成功", LogPrefixClient)
-		return udpConn, nil
-	}
-	return nil, nil
+	return conn, nil
 }
 
 // udp 建立UDP代理连接
@@ -275,39 +263,32 @@ func (c *Client) tcp(conn net.Conn, host string, port uint16) error {
 	return err
 }
 
-// TcpProxy 创建TCP代理连接
+// TcpProxy TCP代理
 func (c *Client) TcpProxy(host string, port uint16) (net.Conn, error) {
 	conn, err := c.conn()
 	if err != nil {
 		return nil, err
 	}
-
-	// 发送CONNECT请求
-	err = c.tcp(conn, host, port)
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
-
-	// 返回连接，客户端可以开始发送数据
-	return conn, nil
+	return c.requisition(conn, host, port, Connect)
 }
 
 // GetHttpProxyClient 获取配置了SOCKS5代理的HTTP客户端
 func (c *Client) GetHttpProxyClient() *http.Client {
-	httpTransport := &http.Transport{}
-	httpTransport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		split := strings.Split(addr, ":")
-		if len(split) < 2 {
-			return c.TcpProxy(split[0], 80)
-		}
-		port, err := strconv.Atoi(split[1])
-		if err != nil {
-			return nil, err
-		}
-		return c.TcpProxy(split[0], uint16(port))
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				host, portStr, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+				port, err := strconv.ParseUint(portStr, 10, 16)
+				if err != nil {
+					return nil, err
+				}
+				return c.TcpProxy(host, uint16(port))
+			},
+		},
 	}
-	return &http.Client{Transport: httpTransport}
 }
 
 // GetHttpProxyClientSpecify 获取自定义配置的HTTP代理客户端
@@ -326,42 +307,31 @@ func (c *Client) GetHttpProxyClientSpecify(transport *http.Transport, jar http.C
 	return &http.Client{Transport: transport, Jar: jar, CheckRedirect: CheckRedirect, Timeout: Timeout}
 }
 
-// UdpProxy 创建UDP代理连接
+// UdpProxy UDP代理
 func (c *Client) UdpProxy(host string, port uint16) (*UdpProxy, error) {
 	conn, err := c.conn()
 	if err != nil {
 		return nil, err
 	}
-	udpConn, err := c.udp(conn, "0.0.0.0", 0)
+	_, err = c.requisition(conn, host, port, UDP)
 	if err != nil {
-		conn.Close()
 		return nil, err
 	}
-
-	udpConnTyped, ok := udpConn.(*net.UDPConn)
-	if !ok {
-		conn.Close()
-		udpConn.Close()
-		return nil, errors.New("UDP连接类型错误")
-	}
-
-	proxy := &UdpProxy{
-		Conn:    conn,
-		UdpConn: udpConnTyped,
-		Host:    host,
-		Port:    port,
-		client:  c,
-	}
-	return proxy, nil
+	return &UdpProxy{
+		Conn:   conn,
+		Host:   host,
+		Port:   port,
+		client: c,
+	}, nil
 }
 
-// Close 关闭UDP代理连接
+// Close 关闭UDP代理
 func (u *UdpProxy) Close() error {
-	if u.Conn != nil {
-		u.Conn.Close()
-	}
 	if u.UdpConn != nil {
 		u.UdpConn.Close()
+	}
+	if u.Conn != nil {
+		u.Conn.Close()
 	}
 	return nil
 }

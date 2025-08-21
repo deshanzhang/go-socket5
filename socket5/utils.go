@@ -103,3 +103,79 @@ func ioCopy(dst net.Conn, src net.Conn) {
 
 	io.Copy(src, dst)
 }
+
+// IsValidAuthMethod 检查认证方法是否有效
+func IsValidAuthMethod(method uint8) bool {
+	switch method {
+	case NoAuthenticationRequired, AccountPasswordAuthentication:
+		return true
+	default:
+		return false
+	}
+}
+
+// GetAuthMethodName 获取认证方法名称
+func GetAuthMethodName(method uint8) string {
+	switch method {
+	case NoAuthenticationRequired:
+		return "无需认证"
+	case AccountPasswordAuthentication:
+		return "用户名密码认证"
+	default:
+		return fmt.Sprintf("未知认证方法(0x%02x)", method)
+	}
+}
+
+// ValidateAuthConfig 验证认证配置的有效性
+func ValidateAuthConfig(authList []uint8, userMap map[string]string) []string {
+	var warnings []string
+
+	if len(authList) == 0 {
+		warnings = append(warnings, "认证方法列表为空")
+		return warnings
+	}
+
+	hasPasswordAuth := false
+	hasValidMethod := false
+
+	for _, method := range authList {
+		if IsValidAuthMethod(method) {
+			hasValidMethod = true
+			if method == AccountPasswordAuthentication {
+				hasPasswordAuth = true
+			}
+		} else {
+			warnings = append(warnings, fmt.Sprintf("无效的认证方法: 0x%02x", method))
+		}
+	}
+
+	if !hasValidMethod {
+		warnings = append(warnings, "没有有效的认证方法")
+	}
+
+	if hasPasswordAuth && len(userMap) == 0 {
+		warnings = append(warnings, "配置了用户名密码认证但没有用户数据")
+	}
+
+	if hasPasswordAuth {
+		for username, password := range userMap {
+			if username == "" {
+				warnings = append(warnings, "存在空用户名")
+			}
+			if password == "" {
+				warnings = append(warnings, fmt.Sprintf("用户 '%s' 的密码为空", username))
+			}
+		}
+	}
+
+	return warnings
+}
+
+// ToUint8Slice 辅助函数，将[]int转[]uint8
+func ToUint8Slice(arr []int) []uint8 {
+	r := make([]uint8, len(arr))
+	for i, v := range arr {
+		r[i] = uint8(v)
+	}
+	return r
+}

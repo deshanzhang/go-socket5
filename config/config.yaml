@@ -1,11 +1,15 @@
-# 项目配置示例
+# SOCKS5代理服务器配置
 socks5:
   host: 0.0.0.0
   port: 1080
   user: test
   password: test
   blacklist: []
-  auth_list: [2] # 1=无认证 2=用户名密码认证
+  # 认证方法配置:
+  # 0 = 无认证 (NoAuthenticationRequired)
+  # 2 = 用户名密码认证 (AccountPasswordAuthentication)
+  # 可以配置多个认证方法，服务器会按优先级选择
+  auth_list: [2]  # 优先用户名密码认证，其次无认证
 
 gin:
   host: 0.0.0.0
