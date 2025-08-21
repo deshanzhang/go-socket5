@@ -7,27 +7,19 @@ import (
 )
 
 type Socks5Config struct {
-	Host      string   `yaml:"host"`
-	Port      int      `yaml:"port"`
-	User      string   `yaml:"user"`
-	Password  string   `yaml:"password"`
-	BlackList []string `yaml:"blacklist"`
-	AuthList  []int    `yaml:"auth_list"`
-}
-
-type ProjectConfig struct {
-	Socks5 Socks5Config `yaml:"socks5"`
-	Gin    GinConfig    `yaml:"gin"`
+	Listen     string `yaml:"listen"`
+	HttpServer string `yaml:"http_server"`
+	AuthList   []int  `yaml:"auth_list"`
 }
 
 // LoadConfig 读取配置文件
-func LoadConfig(path string) (*ProjectConfig, error) {
+func LoadConfig(path string) (*Socks5Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	var cfg ProjectConfig
+	var cfg Socks5Config
 	decoder := yaml.NewDecoder(f)
 	err = decoder.Decode(&cfg)
 	if err != nil {
