@@ -1,6 +1,6 @@
 # SOCKS5代理服务器配置
 listen: 0.0.0.0
-http_server: 127.0.0.1:8080
+http_server: http://127.0.0.1:8080
 # 认证方法配置:
 # 0 = 无认证 (NoAuthenticationRequired)
 # 2 = 用户名密码认证 (AccountPasswordAuthentication)

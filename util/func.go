@@ -48,3 +48,17 @@ func ConsoleJson(data interface{}, tips ...string) {
 	fmt.Printf("%v\n", string(b))
 	fmt.Printf("%v\n", _tips)
 }
+
+func ToJson(d interface{}) string {
+	byteStr, _ := json.Marshal(d)
+	return string(byteStr)
+}
+
+func StringJsonToStruct(jsonStr string, structs any) error {
+	return json.Unmarshal([]byte(jsonStr), structs)
+}
+
+// ReJson json 转结构体
+func ReJson(str string, v interface{}) error {
+	return json.Unmarshal([]byte(str), v)
+}

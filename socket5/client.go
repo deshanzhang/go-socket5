@@ -14,12 +14,14 @@ import (
 	"time"
 )
 
+var ClientServer *Client
+
 // Client SOCKS5客户端结构体
 type Client struct {
-	Host     string // SOCKS5服务器地址
-	Port     uint16 // SOCKS5服务器端口
-	UserName string // 用户名（可选）
-	Password string // 密码（可选）
+	Host     string `json:"host"`     // SOCKS5服务器地址
+	Port     uint16 `json:"port"`     // SOCKS5服务器端口
+	UserName string `json:"username"` // 用户名（可选）
+	Password string `json:"password"` // 密码（可选）
 }
 
 // AuthPackage 用于组织认证方法的结构体

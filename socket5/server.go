@@ -11,8 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"go-socket5/util"
 )
 
 // 日志前缀常量
@@ -29,6 +27,8 @@ const (
 	ReadTimeout              = 10 * time.Second
 	WriteTimeout             = 10 * time.Second
 )
+
+var ServerClient *Server
 
 // Server SOCKS5服务器结构体
 type Server struct {
@@ -282,7 +282,6 @@ func (s *Server) auth(conn net.Conn) error {
 
 // validateAuthConfig 验证认证配置
 func (s *Server) validateAuthConfig() error {
-	util.ConsoleJson(s.Config)
 	warnings := ValidateAuthConfig(s.Config.AuthList, s.UserMap)
 
 	for _, warning := range warnings {
@@ -622,4 +621,57 @@ func (s *Server) handleUDPProxy(tcpConn net.Conn, udpListener *net.UDPConn) {
 		}
 		// 保持TCP连接活跃，实际UDP数据通过UDP监听器处理
 	}
+}
+
+type ConfigInput struct {
+	IpAddress string `json:"ip_address"`
+	User      string `json:"user"`
+	Password  string `json:"password"`
+	Port      int64  `json:"port"`
+}
+
+// TestConnection 测试实际连接功能
+func TestConnection(client Client, urls []string) error {
+	fmt.Println("测试实际网络连接...")
+	// 尝试连接百度
+	for _, url := range urls {
+		conn, err := client.TcpProxy(url, 80)
+		if err != nil {
+			fmt.Printf("❌ 连接失败: %v\n", err)
+			return err
+		}
+
+		fmt.Printf("✅ 连接成功！\n")
+		fmt.Printf("本地地址: %s\n", conn.LocalAddr())
+		fmt.Printf("远程地址: %s\n", conn.RemoteAddr())
+
+		// 发送简单的HTTP请求
+		httpRequest := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", url)
+		_, err = conn.Write([]byte(httpRequest))
+		if err != nil {
+			fmt.Printf("❌ 发送HTTP请求失败: %v\n", err)
+			conn.Close()
+			return err
+		}
+
+		// 读取响应
+		buffer := make([]byte, 1024)
+		n, err := conn.Read(buffer)
+		if err != nil {
+			fmt.Printf("❌ 读取响应失败: %v\n", err)
+		} else {
+			fmt.Printf("✅ 收到响应 (%d 字节)\n", n)
+			// 只显示前100个字符，避免日志过长
+			response := string(buffer[:n])
+			if len(response) > 100 {
+				response = response[:100] + "..."
+			}
+			fmt.Printf("响应内容: %s\n", response)
+		}
+
+		conn.Close()
+	}
+
+	fmt.Println("✅ 实际连接测试完成")
+	return nil
 }
